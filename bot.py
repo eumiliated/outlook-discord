@@ -54,7 +54,7 @@ def extract_course_body_link(msg):
 def send_to_discord(sender, course, body, link=None):
     """Send embed with course, announcement, and link button"""
     embed = {
-        "title": f"mapua",
+        "title": f"From: {sender}",
         "description": f"**{course}**\n\n{body}",
         "color": 15105570
     }
