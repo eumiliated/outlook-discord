@@ -24,7 +24,9 @@ def extract_text(msg):
         text = soup.get_text(separator="\n", strip=True)
     else:
         text = "(No content)"
-    # Clean and shorten
+    
+    # Make sure text is always a string
+    text = str(text)
     return text.replace("\r", " ").replace("\n", " ")[:1000]
 
 def send_to_discord(sender, subject, preview):
