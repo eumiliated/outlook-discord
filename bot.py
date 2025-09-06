@@ -1,10 +1,11 @@
 import os
+import re
 import time
 import requests
 from imap_tools import MailBox, AND
 from bs4 import BeautifulSoup
 
-# ---- env helpers ----
+# ------------------ ENV VARS ------------------
 def require_env(name: str) -> str:
     val = os.getenv(name)
     if not val:
@@ -12,47 +13,137 @@ def require_env(name: str) -> str:
         raise SystemExit(1)
     return val
 
-# Load credentials from environment variables (✅ use proper names)
 EMAIL = require_env("GMAIL_EMAIL")                 # e.g. generalderp07@gmail.com
 PASSWORD = require_env("GMAIL_APP_PASSWORD")       # 16-char Gmail App Password (no spaces)
-DISCORD_WEBHOOK_URL = require_env("DISCORD_WEBHOOK_URL")  # your Discord webhook URL
+DISCORD_WEBHOOK_URL = require_env("DISCORD_WEBHOOK_URL")  # full webhook URL
+ROLE_ID = os.getenv("DISCORD_ROLE_ID", "1413784173570818080")  # your role id
 
-# Config
+# ------------------ CONFIG ------------------
 IMAP_SERVER = "imap.gmail.com"
-CHECK_INTERVAL = 60  # seconds between checks
-ALLOWED_SENDER = "entalabador@mymail.mapua.edu.ph"
+CHECK_INTERVAL = 60  # seconds
+# allow either the Outlook forwarder or the original Blackboard sender if it ever passes through
+ALLOWED_SENDERS = {"entalabador@mymail.mapua.edu.ph", "cardinal_edge@mapua.edu.ph"}
 SUBJECT_KEYWORDS = ["due soon", "announcement"]
 
-def extract_text(msg):
-    """Extract plain text from HTML or plain email body safely"""
-    try:
-        html_content = msg.html or ""     # always a string
-        text_content = msg.text or ""     # always a string
+# ------------------ HTML PARSING ------------------
+def collapse_ws(text: str, limit: int = 1000) -> str:
+    """Collapse whitespace/newlines and trim length."""
+    if not text:
+        return ""
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()[:limit]
 
-        if html_content.strip():
-            soup = BeautifulSoup(html_content, "html.parser")
-            text = soup.get_text(separator="\n", strip=True)
-        elif text_content.strip():
-            text = text_content
-        else:
-            text = "(no content)"
-    except Exception as e:
-        print("⚠️ Extract error:", repr(e))
-        text = "(error extracting text)"
-    # ensure string and trim
-    return str(text)[:1000]
+def parse_email_html_for_details(html: str, subject_fallback: str = "") -> dict:
+    """
+    Try to extract a Blackboard-style 'box':
+      - a main header (e.g., 'Assignment due soon' / 'New announcement')
+      - a course or subheader (e.g., 'UNDERSTANDING THE SELF')
+      - a due line ('Due Thursday, ...')
+      - a primary 'View' / 'Open' link
+      - a safe preview of the HTML as plaintext
+    Works defensively for other HTML formats as well.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
 
-def send_to_discord(sender, subject, preview):
-    """Send nicely formatted embed message to Discord"""
+    # Headings: prefer h1/h2/h3
+    header = None
+    course = None
+    subheader = None
+    for tag in soup.find_all(["h1", "h2", "h3"]):
+        t = (tag.get_text(strip=True) or "").strip()
+        if not t:
+            continue
+        if not header:
+            header = t
+            continue
+        # heuristics: often the all-caps item is the course
+        if not course and t.isupper() and 4 <= len(t) <= 80:
+            course = t
+        elif not subheader:
+            subheader = t
+
+    # If no header from headings, try strong/b tags as fallback
+    if not header:
+        strong = soup.find(["strong", "b"])
+        if strong:
+            header = strong.get_text(strip=True)
+
+    # Due line (first text node containing 'Due' / 'deadline')
+    due = None
+    due_node = soup.find(string=lambda s: isinstance(s, str) and bool(re.search(r"\b(due|deadline)\b", s, re.I)))
+    if due_node:
+        due = due_node.strip()
+
+    # Primary "button" link
+    button = soup.find("a", string=lambda s: isinstance(s, str) and bool(re.search(r"\b(view|open|announcement|assignment|submit)\b", s, re.I)))
+    button_text, button_link = None, None
+    if button and button.get("href"):
+        button_link = button["href"]
+        button_text = (button.get_text(strip=True) or "Open")
+    else:
+        # fallback: first link in the email
+        first_a = soup.find("a", href=True)
+        if first_a:
+            button_link = first_a["href"]
+            button_text = (first_a.get_text(strip=True) or "Open")
+
+    # Plaintext preview from HTML
+    preview = collapse_ws(soup.get_text(separator="\n", strip=True))
+
+    return {
+        "header": header or subject_fallback or "(No title)",
+        "course": course,
+        "subheader": subheader,
+        "due": due,
+        "button_text": button_text,
+        "button_link": button_link,
+        "preview": preview,
+    }
+
+# ------------------ DISCORD ------------------
+def send_embed_to_discord(sender: str, subject: str, details: dict):
+    """
+    Build a Discord embed that resembles the box:
+      - Mention role (NOT in the title)
+      - Title: "New Email from <sender>"
+      - Description: Subject, header, subheader/course, due, and a link button
+    """
+    # Build description
+    lines = []
+    if subject:
+        lines.append(f"**Subject:** {subject}")
+    if details.get("header"):
+        lines.append(f"\n**{details['header']}**")
+    if details.get("subheader"):
+        lines.append(details["subheader"])
+    if details.get("course") and details.get("course") != details.get("subheader"):
+        lines.append(details["course"])
+    if details.get("due"):
+        lines.append(f"📅 **{details['due']}**")
+
+    # clickable link
+    if details.get("button_link"):
+        btn_text = details.get("button_text") or "Open"
+        lines.append(f"\n[🔗 {btn_text}]({details['button_link']})")
+
+    # If we still have very little, include a short preview
+    if len("\n".join(lines)) < 60 and details.get("preview"):
+        lines.append(f"\n{details['preview']}")
+
+    description = collapse_ws("\n".join(lines), limit=1500)
+
     payload = {
+        "content": f"<@&{ROLE_ID}>",   # ✅ role mention OUTSIDE the title
         "embeds": [
             {
-                "title": f"<@&1413784173570818080>, Let it be known unto all good subjects, that His Most Gracious Majesty, Mapua University, hath dispatched word from the depths of hell.",
-                "description": f"**Subject:** {subject}\n\n**Preview:**\n{preview}",
-                "color": 5814783
+                "title": f"📩 New Email from {sender}",
+                "description": description,
+                "color": 0xF1C40F,   # nice yellow accent
             }
         ]
     }
+
     try:
         r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=20)
         if r.status_code not in (200, 204):
@@ -62,23 +153,42 @@ def send_to_discord(sender, subject, preview):
     except Exception as e:
         print("⚠️ Discord post failed:", repr(e))
 
+# ------------------ MAIL CHECK ------------------
+def should_forward(sender_email: str, subject: str) -> bool:
+    if not sender_email:
+        return False
+    sender_email = sender_email.lower()
+    if sender_email not in {s.lower() for s in ALLOWED_SENDERS}:
+        return False
+    if not subject:
+        return False
+    lower_subj = subject.lower()
+    return any(w in lower_subj for w in SUBJECT_KEYWORDS)
+
 def check_mail():
-    """Check Gmail for new matching emails"""
+    """Check Gmail for new matching emails and send to Discord."""
     with MailBox(IMAP_SERVER).login(EMAIL, PASSWORD, "INBOX") as mailbox:
-        # mark_seen=True prevents re-sending the same emails every minute
+        # mark_seen=True so we don't re-send the same message every loop
         for msg in mailbox.fetch(AND(seen=False), mark_seen=True, bulk=True):
-            sender_email = (msg.from_ or "").lower()
-            subject = msg.subject or ""
-            if sender_email == ALLOWED_SENDER.lower() and any(
-                word.lower() in subject.lower() for word in SUBJECT_KEYWORDS
-            ):
-                text_preview = extract_text(msg)
-                send_to_discord(msg.from_, subject, text_preview)
+            sender = (msg.from_ or "").strip()
+            subject = (msg.subject or "").strip()
+
+            # Uncomment for debugging to see every email that arrives
+            # print("📬 Incoming:", sender, "|", subject)
+
+            if should_forward(sender, subject):
+                details = (
+                    parse_email_html_for_details(msg.html or "", subject_fallback=subject)
+                    if (msg.html and msg.html.strip())
+                    else {"header": subject, "preview": (msg.text or "").strip()}
+                )
+                send_embed_to_discord(sender, subject, details)
             else:
-                # Uncomment for debugging:
-                # print("⏭️ Skipped:", sender_email, "|", subject)
+                # Uncomment to see skipped items
+                # print("⏭️ Skipped:", sender, "|", subject)
                 pass
 
+# ------------------ MAIN LOOP ------------------
 if __name__ == "__main__":
     print("✅ Email → Discord notifier started.")
     while True:
