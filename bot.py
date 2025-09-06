@@ -21,7 +21,11 @@ ROLE_ID = os.getenv("DISCORD_ROLE_ID", "1413784173570818080")
 # ------------------ CONFIG ------------------
 IMAP_SERVER = "imap.gmail.com"
 CHECK_INTERVAL = 60  # seconds
-ALLOWED_SENDER = "entalabador@mymail.mapua.edu.ph, cardinal_edge@mapua.edu.ph"  # only forward from this address
+ALLOWED_SENDER = (
+    "entalabador@mymail.mapua.edu.ph",
+    "cardinal_edge@mapua.edu.ph"
+)
+# only forward from this address
 
 def parse_email_content(msg):
     """Extract course info, announcement body, and link from email HTML."""
