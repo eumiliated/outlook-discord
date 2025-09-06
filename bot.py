@@ -2,7 +2,7 @@ import os
 import re
 import time
 import requests
-from imap_tools import MailBox, AND
+from imap_tools import MailBox, AND, MailMessageFlags
 from bs4 import BeautifulSoup
 
 # ------------------ ENV ------------------
@@ -21,7 +21,7 @@ ROLE_ID = os.getenv("DISCORD_ROLE_ID", "1413784173570818080")
 # ------------------ CONFIG ------------------
 IMAP_SERVER = "imap.gmail.com"
 CHECK_INTERVAL = 60  # seconds
-ALLOWED_SENDER = "entalabador@mymail.mapua.edu.ph"  # only forward from this address
+ALLOWED_SENDER = "entalabador@mymail.mapua.edu.ph, cardinal_edge@mapua.edu.ph"  # only forward from this address
 
 def parse_email_content(msg):
     """Extract course info, announcement body, and link from email HTML."""
@@ -65,7 +65,7 @@ def send_to_discord(course_title, body, link):
         ]
     }
 
-    r = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    r = requests.post(DISCORD_WEBHOOK, json=payload)
     if r.status_code != 204:
         print("⚠️ Discord webhook error:", r.status_code, r.text)
 
