@@ -72,7 +72,7 @@ def send_to_discord(course_title, body, link):
 
 def check_mail():
     """Check Gmail for new emails and forward as embeds to Discord."""
-    with MailBox(IMAP_SERVER).login(EMAIL, PASSWORD) as mailbox:
+    with MailBox(IMAP_SERVER).login(EMAIL, EMAIL_PASSWORD) as mailbox:
         for msg in mailbox.fetch(AND(seen=False)):
             if msg.from_ == ALLOWED_SENDER:
                 course_title, body, link = parse_email_content(msg)
