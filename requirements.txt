@@ -1,2 +1,2 @@
+imap-tools
 requests
-msal
