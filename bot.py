@@ -13,5 +13,5 @@ def send_message(msg):
 
 if __name__ == "__main__":
     while True:
-        send_message("✅ Hello from Heroku! Your bot.py is running.")
+        send_message("mapua wont give me access to outlook dawg")
         time.sleep(60)  # wait 1 minute
