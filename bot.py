@@ -18,17 +18,20 @@ SUBJECT_KEYWORDS = ["due soon", "announcement"]
 def extract_text(msg):
     """Extract plain text from HTML or plain email body safely"""
     try:
-        if msg.html:
-            soup = BeautifulSoup(msg.html or "", "html.parser")
+        html_content = msg.html or ""   # ensure it's always a string
+        text_content = msg.text or ""   # ensure it's always a string
+
+        if html_content.strip():
+            soup = BeautifulSoup(html_content, "html.parser")
             text = soup.get_text(separator="\n", strip=True)
-        elif msg.text:
-            text = msg.text
+        elif text_content.strip():
+            text = text_content
         else:
             text = "(no content)"
     except Exception as e:
         print("⚠️ Extract error:", e)
         text = "(error extracting text)"
-    return text[:1000]  # limit to avoid flooding Discord
+    return text[:1000]  # limit length
 
 def send_to_discord(sender, subject, preview):
     """Send nicely formatted embed message to Discord"""
