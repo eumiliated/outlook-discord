@@ -14,6 +14,10 @@ IMAP_SERVER = "imap.gmail.com"
 CHECK_INTERVAL = 60  # seconds between checks
 ALLOWED_SENDER = "entalabador@mymail.mapua.edu.ph"
 
+def safe_str(value):
+    """Return a safe string, never None"""
+    return str(value) if value is not None else ""
+
 def extract_course_body_link(msg):
     """Extract course name, body text, and a 'View' link from the HTML email"""
     course = "(Unknown Course)"
@@ -21,7 +25,9 @@ def extract_course_body_link(msg):
     link = None
 
     try:
-        html_content = msg.html or ""
+        html_content = safe_str(msg.html)
+        text_content = safe_str(msg.text)
+
         if html_content.strip():
             soup = BeautifulSoup(html_content, "html.parser")
 
@@ -32,7 +38,8 @@ def extract_course_body_link(msg):
 
             # Extract body text (short preview)
             text = soup.get_text(separator="\n", strip=True)
-            body_text = "\n".join(text.splitlines()[1:8])  # preview
+            if text.strip():
+                body_text = "\n".join(text.splitlines()[1:8])
 
             # Find "View" link
             view_link = soup.find("a", string=lambda s: s and "view" in s.lower())
@@ -44,23 +51,25 @@ def extract_course_body_link(msg):
                 if first_link and first_link.get("href"):
                     link = first_link["href"]
 
+        elif text_content.strip():
+            body_text = text_content
         else:
-            body_text = msg.text or "(empty)"
+            body_text = "(empty)"
     except Exception as e:
         print("⚠️ Extract error:", e)
 
     return course, body_text[:1000], link
 
 def send_to_discord(sender, course, body, link=None):
-    """Send embed with course, announcement, and link button"""
+    """Send embed with course, announcement, and link"""
     embed = {
-        "title": f"From: {sender}",
+        "title": f"From: {safe_str(sender)}",
         "description": f"**{course}**\n\n{body}",
         "color": 15105570
     }
 
     if link:
-        embed["url"] = link  # clicking embed title opens link
+        embed["url"] = link  # make embed title clickable
 
     payload = {
         "content": "<@&1413784173570818080>",  # role mention
@@ -75,9 +84,10 @@ def check_mail():
     """Check Gmail for new matching emails"""
     with MailBox(IMAP_SERVER).login(EMAIL, PASSWORD) as mailbox:
         for msg in mailbox.fetch(AND(seen=False)):
-            if msg.from_ == ALLOWED_SENDER:
+            sender = safe_str(msg.from_)
+            if sender.lower() == ALLOWED_SENDER.lower():
                 course, body, link = extract_course_body_link(msg)
-                send_to_discord(msg.from_, course, body, link)
+                send_to_discord(sender, course, body, link)
 
 if __name__ == "__main__":
     print("✅ Email → Discord notifier started.")
