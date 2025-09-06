@@ -23,7 +23,6 @@ IMAP_SERVER = "imap.gmail.com"
 CHECK_INTERVAL = 60  # seconds
 # allow either the Outlook forwarder or the original Blackboard sender if it ever passes through
 ALLOWED_SENDERS = {"entalabador@mymail.mapua.edu.ph", "cardinal_edge@mapua.edu.ph"}
-SUBJECT_KEYWORDS = ["due soon", "announcement"]
 
 # ------------------ HTML PARSING ------------------
 def collapse_ws(text: str, limit: int = 1000) -> str:
