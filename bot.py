@@ -24,8 +24,7 @@ CHECK_INTERVAL = 60  # seconds
 ALLOWED_SENDER = (
     "entalabador@mymail.mapua.edu.ph",
     "cardinal_edge@mapua.edu.ph"
-)
-# only forward from this address
+) # only forward from this address
 
 def parse_email_content(msg):
     """Extract course info, announcement body, and link from email HTML."""
@@ -78,10 +77,11 @@ def check_mail():
     """Check Gmail for new emails and forward as embeds to Discord."""
     with MailBox(IMAP_SERVER).login(EMAIL, EMAIL_PASSWORD) as mailbox:
         for msg in mailbox.fetch(AND(seen=False)):
-            if msg.from_ == ALLOWED_SENDER:
+            if msg.from_ in ALLOWED_SENDER:  # ✅ check membership instead of ==
                 course_title, body, link = parse_email_content(msg)
                 send_to_discord(course_title, body, link)
                 mailbox.flag(msg.uid, MailMessageFlags.SEEN, True)  # mark as read
+
 
 if __name__ == "__main__":
     print("Email → Discord notifier started.")
