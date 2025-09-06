@@ -14,8 +14,8 @@ def require_env(name: str) -> str:
     return val
 
 EMAIL = require_env("GMAIL_EMAIL")                       # e.g. your Gmail address
-EMAIL_PASSWORD = require_env("EMAIL_PASSWORD")     # Gmail App Password (16 chars)
-DISCORD_WEBHOOK = require_env("DISCORD_WEBHOOK")   # Discord webhook URL
+EMAIL_PASSWORD = require_env("GMAIL_APP_PASSWORD")     # Gmail App Password (16 chars)
+DISCORD_WEBHOOK = require_env("DISCORD_WEBHOOK_URL")   # Discord webhook URL
 ROLE_ID = os.getenv("DISCORD_ROLE_ID", "1413784173570818080")
 
 # ------------------ CONFIG ------------------
