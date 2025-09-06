@@ -47,7 +47,7 @@ def send_to_discord(sender, subject, preview):
     payload = {
         "embeds": [
             {
-                "title": f"<@&1413784173570818080>, Let it be known unto all good subjects, that His Most Gracious Majesty, King {sender}, hath dispatched word from the depths of hell.",
+                "title": f"<@&1413784173570818080>, Let it be known unto all good subjects, that His Most Gracious Majesty, Mapua University, hath dispatched word from the depths of hell.",
                 "description": f"**Subject:** {subject}\n\n**Preview:**\n{preview}",
                 "color": 5814783
             }
