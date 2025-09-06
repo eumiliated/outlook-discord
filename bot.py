@@ -16,25 +16,28 @@ ALLOWED_SENDER = "entalabador@mymail.mapua.edu.ph"
 SUBJECT_KEYWORDS = ["due soon", "announcement"]
 
 def extract_text(msg):
-    """Extract plain text from HTML or plain email body"""
-    if msg.html:
+    """Extract plain text from HTML or plain email body safely"""
+    if msg.text:
+        text = msg.text.strip()
+    elif msg.html:
         soup = BeautifulSoup(msg.html, "html.parser")
         text = soup.get_text(separator="\n", strip=True)
     else:
-        text = msg.text or ""
-    return text[:1000]  # limit to avoid flooding Discord
+        text = "(No content)"
+    # Clean and shorten
+    return text.replace("\r", " ").replace("\n", " ")[:1000]
 
 def send_to_discord(sender, subject, preview):
     """Send nicely formatted embed message to Discord"""
     payload = {
-    "embeds": [
-        {
-            "title": f"<@&1413784173570818080>, Let it be known unto all good subjects, that His Most Gracious Majesty, King {sender}, hath dispatched word from the depths of hell.",
-            "description": f"**Subject:** {subject}\n\n**Preview:**\n{preview}",
-            "color": 5814783
-        }
-    ]
-}
+        "embeds": [
+            {
+                "title": f"<@&1413784173570818080>, Let it be known unto all good subjects, that His Most Gracious Majesty, King {sender}, hath dispatched word from the depths of hell.",
+                "description": f"**Subject:** {subject}\n\n**Preview:**\n{preview}",
+                "color": 5814783
+            }
+        ]
+    }
     requests.post(DISCORD_WEBHOOK_URL, json=payload)
 
 def check_mail():
