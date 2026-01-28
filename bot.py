@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 def require_env(name: str) -> str:
     val = os.getenv(name)
     if not val:
-        print(f"❌ Missing env var: {name}. Set it in Heroku.")
+        print(f"❌ Missing env var: {name}.")
         raise SystemExit(1)
     return val
 
@@ -20,7 +20,7 @@ DISCORD_WEBHOOK = require_env("DISCORD_WEBHOOK")
 
 # ------------------ CONFIG ------------------
 IMAP_SERVER = "imap.gmail.com"
-CHECK_INTERVAL = 60  # seconds
+CHECK_INTERVAL = 60
 ALLOWED_SENDER = (
     "entalabador@mymail.mapua.edu.ph",
     "cardinal_edge@mapua.edu.ph"
@@ -28,7 +28,7 @@ ALLOWED_SENDER = (
 
 # ------------------ HELPERS ------------------
 def html_to_discord_text(html_fragment):
-    """Convert HTML to clean text with preserved newlines for Discord."""
+    """Convert HTML to clean text with preserved newlines."""
     soup = BeautifulSoup(str(html_fragment), "html.parser")
     for br in soup.find_all("br"):
         br.replace_with("\n")
@@ -42,7 +42,8 @@ def html_to_discord_text(html_fragment):
 
 def parse_email_content(msg):
     """
-    Parses the email and builds the FULL Discord payload.
+    Parses the email.
+    Uses 'Top-Down' scanning to strictly respect category headers.
     """
     html_content = msg.html or ""
     soup = BeautifulSoup(html_content, "html.parser")
@@ -57,74 +58,75 @@ def parse_email_content(msg):
         now_str = datetime.now().strftime("%A, %B %d")
         message_content = f"# **{now_str}**"
         
-        # 2. Comprehensive List of Blackboard Headers
-        # We use a set for faster lookup, but regex for matching
+        # 2. Define Categories (Headers to look for)
         known_headers = [
-            "Assessments", "Assignments", "Tests", "Quizzes", "Exams",
-            "Other new content", "Content", "Course Content", "Build Content",
-            "Announcements", "Discussions", "Calendar", "Grades",
-            "Blogs", "Journals", "Wikis", "Groups", "Tools", "Tasks"
+            "Assessments", "Assignments", "Tests", "Quizzes", 
+            "Other new content", "Content", "Course Content", 
+            "Announcements", "Grades", "Calendar", "Blogs"
         ]
         
-        categorized_items = {} 
+        categorized_items = {}
+        current_category = "General Updates" # Default start category
 
-        # 3. Find items (looking for "added", "updated", "graded")
-        items = soup.find_all(string=re.compile(r"\b(added|updated|graded)\b", re.IGNORECASE))
+        # 3. TOP-DOWN SCANNING (The Fix)
+        # We iterate over all semantic elements to respect the order
+        all_elements = soup.find_all(['a', 'div', 'span', 'h1', 'h2', 'h3', 'b', 'strong'])
         
-        for item_status in items:
-            # --- Extract Title & Link ---
-            link_tag = item_status.find_previous("a")
-            if not link_tag: continue
+        for el in all_elements:
+            text = el.get_text(strip=True)
+            if not text:
+                continue
 
-            title = link_tag.get_text(strip=True).replace("\n", " ")
-            url = link_tag.get("href", "#")
-            
-            # --- Determine Category ---
-            # Search backwards for the nearest known Header
-            # We use a regex that matches ANY of the known headers
-            header_pattern = "|".join(map(re.escape, known_headers))
-            header_node = link_tag.find_previous(string=re.compile(header_pattern, re.IGNORECASE))
-            
-            # If found, strip whitespace to match the key cleanly
-            if header_node:
-                # Normalize the category name (e.g. "  Assessments " -> "Assessments")
-                found_text = header_node.strip()
-                # Double check it matches one of our known keys partialy to avoid grabbing garbage
-                category = "General Updates"
-                for known in known_headers:
-                    if known.lower() in found_text.lower():
-                        category = known
-                        break
-            else:
-                category = "General Updates"
-            
-            # --- Format Line (No Italics, just Bullet + Link + Status) ---
-            line = f"• [**{title}**]({url}) {item_status.strip()}"
-            
-            if category not in categorized_items:
-                categorized_items[category] = []
-            
-            # Avoid duplicates if the email lists the same thing twice
-            if line not in categorized_items[category]:
-                categorized_items[category].append(line)
+            # CHECK: Is this a Category Header?
+            # We match exactly one of the known headers (ignoring case)
+            if any(h.lower() == text.lower() for h in known_headers):
+                current_category = text # Switch the 'active' category
+                continue # Move to next element
+
+            # CHECK: Is this an Update Item?
+            # We look for "added" or "updated" in the text node immediately following this element
+            # OR if this element itself is an <a> tag followed by "added"
+            if el.name == 'a':
+                # Check siblings/text for status
+                status_text = el.find_next_sibling(string=True)
+                if not status_text:
+                    # Sometimes it's inside a parent's text
+                    status_text = el.parent.get_text()
+                
+                if status_text and re.search(r"\b(added|updated)\b", status_text, re.IGNORECASE):
+                    # LINEAR FORMAT FIX:
+                    # Collapse newlines/spaces: "Quiz\n1" -> "Quiz 1"
+                    title = " ".join(el.get_text().split())
+                    url = el.get("href", "#")
+                    status = "added" if "added" in status_text.lower() else "updated"
+                    
+                    # Create the bullet point
+                    line = f"• [**{title}**]({url}) {status}"
+                    
+                    # Add to the CURRENT active category
+                    if current_category not in categorized_items:
+                        categorized_items[current_category] = []
+                    
+                    # Avoid duplicates
+                    if line not in categorized_items[current_category]:
+                        categorized_items[current_category].append(line)
 
         # 4. Build Embeds
         embeds_list = []
-        # sort categories to keep "Assessments" or "Announcements" near top if possible
-        sorted_keys = sorted(categorized_items.keys())
-        
-        for category in sorted_keys:
-            lines = categorized_items[category]
+        if not categorized_items:
+            # Fallback if top-down failed (empty list)
+            return None 
+
+        for category, lines in categorized_items.items():
             full_desc = "\n\n".join(lines)
             
-            # Length safety check
             if len(full_desc) > 4000:
                 full_desc = full_desc[:3900] + "\n...(truncated)"
 
             embed = {
                 "title": f"📂 {category}",
                 "description": full_desc,
-                "color": 5814783, # Purple
+                "color": 5814783,
                 "url": "https://mapua.blackboard.com"
             }
             embeds_list.append(embed)
@@ -135,7 +137,7 @@ def parse_email_content(msg):
         }
 
     # ---------------------------------------------------------
-    # SCENARIO B: Standard Announcement (Single Embed)
+    # SCENARIO B: Standard Announcement (Fallback)
     # ---------------------------------------------------------
     course_block = soup.find("span", string=lambda t: t and "_" in t)
     course_code = course_block.get_text(strip=True) if course_block else "Mapúa Blackboard"
@@ -178,7 +180,8 @@ def check_mail():
             sender = msg.from_.strip().lower()
             if any(sender.endswith(allowed.lower()) for allowed in ALLOWED_SENDER):
                 discord_payload = parse_email_content(msg)
-                if discord_payload["embeds"]:
+                # Only send if payload is valid and has embeds
+                if discord_payload and discord_payload.get("embeds"):
                     send_to_discord(discord_payload)
                     mailbox.flag(msg.uid, MailMessageFlags.SEEN, True)
 
