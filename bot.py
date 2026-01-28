@@ -53,16 +53,23 @@ def parse_email_content(msg):
     if soup.find(string=re.compile("Your updates", re.IGNORECASE)):
         print("Creating Digest Payload...")
         
-        # 1. Header
+        # 1. Header Message
         now_str = datetime.now().strftime("%A, %B %d")
-        message_content = f"# **Updates for {now_str}**"
+        message_content = f"# **{now_str}**"
         
-        # 2. Categories
-        known_headers = ["Assessments", "Other new content", "Announcements", "Grades", "Calendar"]
+        # 2. Comprehensive List of Blackboard Headers
+        # We use a set for faster lookup, but regex for matching
+        known_headers = [
+            "Assessments", "Assignments", "Tests", "Quizzes", "Exams",
+            "Other new content", "Content", "Course Content", "Build Content",
+            "Announcements", "Discussions", "Calendar", "Grades",
+            "Blogs", "Journals", "Wikis", "Groups", "Tools", "Tasks"
+        ]
+        
         categorized_items = {} 
 
-        # 3. Find items
-        items = soup.find_all(string=re.compile(r"\b(added|updated)\b", re.IGNORECASE))
+        # 3. Find items (looking for "added", "updated", "graded")
+        items = soup.find_all(string=re.compile(r"\b(added|updated|graded)\b", re.IGNORECASE))
         
         for item_status in items:
             # --- Extract Title & Link ---
@@ -73,33 +80,54 @@ def parse_email_content(msg):
             url = link_tag.get("href", "#")
             
             # --- Determine Category ---
-            header_node = link_tag.find_previous(string=re.compile("|".join(known_headers), re.IGNORECASE))
-            category = header_node.strip() if header_node else "General Updates"
+            # Search backwards for the nearest known Header
+            # We use a regex that matches ANY of the known headers
+            header_pattern = "|".join(map(re.escape, known_headers))
+            header_node = link_tag.find_previous(string=re.compile(header_pattern, re.IGNORECASE))
             
-            # --- Format Line (CLEAN VERSION: No Course Name) ---
-            # Result: • [**Quiz 1**](link) added
+            # If found, strip whitespace to match the key cleanly
+            if header_node:
+                # Normalize the category name (e.g. "  Assessments " -> "Assessments")
+                found_text = header_node.strip()
+                # Double check it matches one of our known keys partialy to avoid grabbing garbage
+                category = "General Updates"
+                for known in known_headers:
+                    if known.lower() in found_text.lower():
+                        category = known
+                        break
+            else:
+                category = "General Updates"
+            
+            # --- Format Line (No Italics, just Bullet + Link + Status) ---
             line = f"• [**{title}**]({url}) {item_status.strip()}"
             
             if category not in categorized_items:
                 categorized_items[category] = []
-            categorized_items[category].append(line)
+            
+            # Avoid duplicates if the email lists the same thing twice
+            if line not in categorized_items[category]:
+                categorized_items[category].append(line)
 
         # 4. Build Embeds
         embeds_list = []
-        for category, lines in categorized_items.items():
+        # sort categories to keep "Assessments" or "Announcements" near top if possible
+        sorted_keys = sorted(categorized_items.keys())
+        
+        for category in sorted_keys:
+            lines = categorized_items[category]
             full_desc = "\n\n".join(lines)
+            
+            # Length safety check
             if len(full_desc) > 4000:
                 full_desc = full_desc[:3900] + "\n...(truncated)"
 
             embed = {
                 "title": f"📂 {category}",
                 "description": full_desc,
-                "color": 5814783,
+                "color": 5814783, # Purple
                 "url": "https://mapua.blackboard.com"
             }
             embeds_list.append(embed)
-
-        embeds_list.sort(key=lambda x: x['title'])
 
         return {
             "content": message_content,
