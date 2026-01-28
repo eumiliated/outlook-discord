@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 def require_env(name: str) -> str:
     val = os.getenv(name)
     if not val:
-        print(f"❌ Missing env var: {name}.")
+        print(f"❌ Missing env var: {name}. Set it in Heroku.")
         raise SystemExit(1)
     return val
 
@@ -43,13 +43,13 @@ def html_to_discord_text(html_fragment):
 def parse_email_content(msg):
     """
     Parses the email.
-    Uses 'Top-Down' scanning to strictly respect category headers.
+    Consolidates all categories into ONE Discord Embed with visual headers.
     """
     html_content = msg.html or ""
     soup = BeautifulSoup(html_content, "html.parser")
     
     # ---------------------------------------------------------
-    # SCENARIO A: "Your Updates" Digest (Multiple Embeds)
+    # SCENARIO A: "Your Updates" Digest (Single Embed, Categorized)
     # ---------------------------------------------------------
     if soup.find(string=re.compile("Your updates", re.IGNORECASE)):
         print("Creating Digest Payload...")
@@ -58,18 +58,19 @@ def parse_email_content(msg):
         now_str = datetime.now().strftime("%A, %B %d")
         message_content = f"# **{now_str}**"
         
-        # 2. Define Categories (Headers to look for)
+        # 2. Define Headers
         known_headers = [
             "Assessments", "Assignments", "Tests", "Quizzes", 
             "Other new content", "Content", "Course Content", 
-            "Announcements", "Grades", "Calendar", "Blogs"
+            "Announcements", "Grades", "Calendar", "Blogs", "Discussions"
         ]
         
-        categorized_items = {}
-        current_category = "General Updates" # Default start category
+        # We will build one large string for the description
+        full_description = ""
+        current_category = None
+        seen_items = set() # To prevent duplicates
 
-        # 3. TOP-DOWN SCANNING (The Fix)
-        # We iterate over all semantic elements to respect the order
+        # 3. TOP-DOWN SCANNING
         all_elements = soup.find_all(['a', 'div', 'span', 'h1', 'h2', 'h3', 'b', 'strong'])
         
         for el in all_elements:
@@ -78,62 +79,48 @@ def parse_email_content(msg):
                 continue
 
             # CHECK: Is this a Category Header?
-            # We match exactly one of the known headers (ignoring case)
             if any(h.lower() == text.lower() for h in known_headers):
-                current_category = text # Switch the 'active' category
-                continue # Move to next element
+                # Only add the header if it's different from the last one we saw
+                if text != current_category:
+                    current_category = text
+                    # Add a visual separator (Bold Header)
+                    full_description += f"\n\n**📂 {current_category}**\n"
+                continue
 
             # CHECK: Is this an Update Item?
-            # We look for "added" or "updated" in the text node immediately following this element
-            # OR if this element itself is an <a> tag followed by "added"
             if el.name == 'a':
-                # Check siblings/text for status
                 status_text = el.find_next_sibling(string=True)
                 if not status_text:
-                    # Sometimes it's inside a parent's text
                     status_text = el.parent.get_text()
                 
                 if status_text and re.search(r"\b(added|updated)\b", status_text, re.IGNORECASE):
-                    # LINEAR FORMAT FIX:
-                    # Collapse newlines/spaces: "Quiz\n1" -> "Quiz 1"
+                    # LINEAR FORMAT FIX: "Quiz\n1" -> "Quiz 1"
                     title = " ".join(el.get_text().split())
                     url = el.get("href", "#")
                     status = "added" if "added" in status_text.lower() else "updated"
                     
-                    # Create the bullet point
                     line = f"• [**{title}**]({url}) {status}"
                     
-                    # Add to the CURRENT active category
-                    if current_category not in categorized_items:
-                        categorized_items[current_category] = []
-                    
-                    # Avoid duplicates
-                    if line not in categorized_items[current_category]:
-                        categorized_items[current_category].append(line)
+                    if line not in seen_items:
+                        full_description += f"{line}\n"
+                        seen_items.add(line)
 
-        # 4. Build Embeds
-        embeds_list = []
-        if not categorized_items:
-            # Fallback if top-down failed (empty list)
-            return None 
+        # 4. Length Check (Discord limit is 4096)
+        if len(full_description) > 4000:
+            full_description = full_description[:3900] + "\n...(truncated due to size)"
 
-        for category, lines in categorized_items.items():
-            full_desc = "\n\n".join(lines)
-            
-            if len(full_desc) > 4000:
-                full_desc = full_desc[:3900] + "\n...(truncated)"
-
-            embed = {
-                "title": f"📂 {category}",
-                "description": full_desc,
-                "color": 5814783,
-                "url": "https://mapua.blackboard.com"
-            }
-            embeds_list.append(embed)
+        # If we found nothing, return None so we don't send an empty box
+        if not full_description.strip():
+            return None
 
         return {
             "content": message_content,
-            "embeds": embeds_list
+            "embeds": [{
+                "title": "Blackboard Summary",
+                "description": full_description.strip(),
+                "color": 5814783,
+                "url": "https://mapua.blackboard.com"
+            }]
         }
 
     # ---------------------------------------------------------
@@ -180,7 +167,6 @@ def check_mail():
             sender = msg.from_.strip().lower()
             if any(sender.endswith(allowed.lower()) for allowed in ALLOWED_SENDER):
                 discord_payload = parse_email_content(msg)
-                # Only send if payload is valid and has embeds
                 if discord_payload and discord_payload.get("embeds"):
                     send_to_discord(discord_payload)
                     mailbox.flag(msg.uid, MailMessageFlags.SEEN, True)
