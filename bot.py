@@ -49,31 +49,89 @@ def html_to_discord_text(html_fragment):
 
 
 def parse_email_content(msg):
-    """Extract course info, announcement body, and link from email HTML."""
+    """
+    Parses the email content. 
+    If it detects the 'Your updates' list format, it creates a bulleted list.
+    Otherwise, it falls back to the standard announcement format.
+    """
     html_content = msg.html or ""
     soup = BeautifulSoup(html_content, "html.parser")
+    
+    # --- CHECK FOR "YOUR UPDATES" DIGEST FORMAT ---
+    # We look for the specific header "Your updates" to trigger this specific formatting
+    if soup.find(string=re.compile("Your updates", re.IGNORECASE)):
+        header = "🔔 Blackboard Updates"
+        description_lines = []
+        
+        # 1. Find all lines that say "added" or "updated" (these are the status indicators)
+        #    The structure in the image is: <Link>Title</Link> ... "added" ... <br> Course Name
+        items = soup.find_all(string=re.compile(r"\b(added|updated)\b", re.IGNORECASE))
 
+        for item_status in items:
+            # The "item_status" is just the text node "added". We need to look around it.
+            
+            # A. Find the Title & Link (It is usually the link immediately BEFORE the "added" text)
+            # We search backwards from the "added" text to find the closest <a> tag
+            link_tag = item_status.find_previous("a")
+            
+            if not link_tag:
+                continue
+
+            title = link_tag.get_text(strip=True)
+            url = link_tag.get("href", "#") # use # if no link found
+            
+            # B. Find the Course Name (It is usually the text immediately AFTER the "added" text)
+            # We look for the next distinct block of text.
+            # Depending on email formatting, it might be in the next 'div', 'span', or just the next text node.
+            course_name = "Unknown Course"
+            
+            # Try to find the container of the current link/status, then look at the next container
+            current_container = link_tag.parent
+            next_element = current_container.find_next_sibling()
+            
+            if next_element:
+                course_name = next_element.get_text(strip=True)
+            
+            # C. Format the line for Discord
+            # Result: • [Quiz 1](link) added
+            #          _LOGIC AND CRITICAL THINKING_
+            line = f"• [**{title}**]({url}) {item_status.strip()}\n   _{course_name}_"
+            description_lines.append(line)
+
+        # Combine all lines. If empty, fallback to basic text.
+        if description_lines:
+            full_body = "\n\n".join(description_lines)
+            return header, full_body, "https://mapua.blackboard.com"
+
+    # --- FALLBACK: STANDARD ANNOUNCEMENT FORMAT ---
+    # (This runs if the email is NOT a "Your updates" digest)
+    
     # Extract course code & name
     course_block = soup.find("span", string=lambda t: t and "_" in t)
-    course_code = course_block.get_text(strip=True) if course_block else "Unknown Course"
+    course_code = course_block.get_text(strip=True) if course_block else "Mapúa Blackboard"
 
     course_name_span = course_block.find_next("span") if course_block else None
     course_name = course_name_span.get_text(strip=True) if course_name_span else ""
+    
+    full_title = f"{course_code} - {course_name}" if course_name else course_code
 
-    # Extract announcement body (formatted text)
+    # Extract announcement body
     desc_div = soup.find(id=lambda x: x and "user-defined-description" in x)
     if desc_div:
         body = html_to_discord_text(desc_div)
     else:
         body = html_to_discord_text(soup)
+        # Clean up the "Your updates" header if it accidentally fell through to here
+        body = body.replace("Your updates", "").strip()
 
-    body = body[:4000]  # Discord embed description limit
+    body = body[:4000]
 
     # Extract "View" link
     view_link_tag = soup.find("a", string=lambda t: t and "View" in t)
-    link = view_link_tag["href"] if view_link_tag else None
+    link = view_link_tag["href"] if view_link_tag else "https://mapua.blackboard.com"
 
-    return f"{course_code} - {course_name}", body, link
+    return full_title, body, link
+
 
 
 def send_to_discord(course_title, body, link):
